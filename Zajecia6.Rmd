@@ -1,0 +1,146 @@
+---
+title: "Text mining: model Bag of Words"
+author: ""
+date: ""
+output:
+  html_document:
+    df_print: paged
+    theme: cerulean
+    highlight: default
+    toc: yes
+    toc_depth: 3
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    code_fold: show
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+
+library(tm)
+library(tidytext)
+library(stringr)
+library(wordcloud)
+library(RColorBrewer)
+library(ggplot2)
+library(SnowballC)
+library(SentimentAnalysis)
+library(ggthemes)
+library(tidyverse)
+```
+
+# Funkcje
+
+```{r}
+process_text <- function(file_path) {
+  text <- tolower(readLines(file_path, encoding = "UTF-8"))
+  text <- gsub("[\u2019\u2018\u0060\u00B4]", "'", text)
+  text <- removeNumbers(text)
+  words <- unlist(strsplit(text, "\\s+"))
+  words <- words[words != ""]
+  words <- words[!str_detect(words, "'")]
+  words <- str_replace_all(words, "[[:punct:]]", "")
+  words <- words[words != ""]
+  words <- str_trim(words)
+
+  tidy_stopwords <- tolower(stop_words$word)
+  tm_stopwords <- tolower(stopwords("en"))
+
+  words <- words[!(words %in% tidy_stopwords)]
+  words <- words[!(words %in% tm_stopwords)]
+
+  stemmed_doc <- stemDocument(words)
+  completed_doc <- stemCompletion(stemmed_doc, dictionary=words, type="prevalent")
+  completed_doc <- completed_doc[completed_doc != ""]
+
+  return(completed_doc)
+}
+
+word_frequency <- function(words) {
+  freq <- table(words)
+  freq_df <- data.frame(word = names(freq), freq = as.numeric(freq))
+  freq_df <- freq_df[order(-freq_df$freq), ]
+  return(freq_df)
+}
+
+plot_wordcloud <- function(freq_df, title, color_palette = "Dark2") {
+  wordcloud(words = freq_df$word, freq = freq_df$freq, min.freq = 10,
+            colors = brewer.pal(8, color_palette))
+  title(title)
+}
+```
+
+# Analiza tekstu
+
+```{r}
+file_path <- "trump2026.txt"
+words <- process_text(file_path)
+
+freq_df <- word_frequency(words)
+
+plot_wordcloud(freq_df, "Chmura słów", "Dark2")
+
+head(freq_df, 10)
+```
+
+# Analiza sentymentu (CSV)
+
+```{r}
+afinn <- read.csv("afinn.csv", stringsAsFactors = FALSE)
+bing <- read.csv("bing.csv", stringsAsFactors = FALSE)
+loughran <- read.csv("loughran.csv", stringsAsFactors = FALSE)
+nrc <- read.csv("nrc.csv", stringsAsFactors = FALSE)
+
+tidy_tokeny <- as_tibble(freq_df)
+```
+
+# Loughran
+
+```{r}
+sentiment_review <- tidy_tokeny %>%
+  inner_join(loughran, relationship = "many-to-many")
+
+sentiment_review %>%
+  count(sentiment)
+```
+
+# Wykres sentymentu
+
+```{r}
+sentiment_review2 <- sentiment_review %>%
+  filter(sentiment %in% c("positive", "negative"))
+
+word_counts <- sentiment_review2 %>%
+  group_by(sentiment) %>%
+  top_n(10, freq) %>%
+  ungroup()
+
+ggplot(word_counts, aes(x=reorder(word, freq), y=freq, fill=sentiment)) +
+  geom_col() +
+  coord_flip() +
+  ggtitle("Sentyment (Loughran)")
+```
+
+# Analiza w czasie
+
+```{r}
+full_text <- paste(words, collapse = " ")
+
+split_text_into_chunks <- function(text, chunk_size) {
+  start_positions <- seq(1, nchar(text), by = chunk_size)
+  substring(text, start_positions, start_positions + chunk_size - 1)
+}
+
+text_chunks <- split_text_into_chunks(full_text, 50)
+
+sentiment <- analyzeSentiment(text_chunks)
+
+sentimentGI <- convertToDirection(sentiment$SentimentGI)
+
+df_GI <- na.omit(data.frame(value = sentimentGI))
+
+ggplot(df_GI, aes(x = value)) +
+  geom_bar(fill = "green") +
+  ggtitle("Skumulowany sentyment (GI)")
+```
